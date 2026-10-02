@@ -1,0 +1,91 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.2', laravel: '10.*', testbench: '8.*', pest: '2.*', dependencies: 'prefer-lowest' }
+          - { php: '8.2', laravel: '10.*', testbench: '8.*', pest: '2.*', dependencies: 'prefer-stable' }
+          - { php: '8.3', laravel: '11.*', testbench: '9.*', pest: '3.*', dependencies: 'prefer-lowest' }
+          - { php: '8.3', laravel: '11.*', testbench: '9.*', pest: '3.*', dependencies: 'prefer-stable' }
+          - { php: '8.4', laravel: '12.*', testbench: '10.*', pest: '4.*', dependencies: 'prefer-lowest' }
+          - { php: '8.4', laravel: '12.*', testbench: '10.*', pest: '4.*', dependencies: 'prefer-stable' }
+          - { php: '8.4', laravel: '13.*', testbench: '11.*', pest: '4.*', dependencies: 'prefer-lowest' }
+          - { php: '8.5', laravel: '13.*', testbench: '11.*', pest: '4.*', dependencies: 'prefer-stable' }
+
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.dependencies }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, curl, libxml, mbstring, zip
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer require "illuminate/mail:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" "pestphp/pest:${{ matrix.pest }}" --no-interaction --no-update
+          composer update --${{ matrix.dependencies }} --prefer-dist --no-interaction --no-progress
+
+      - name: Run tests
+        run: vendor/bin/pest
+
+  static-analysis:
+    runs-on: ubuntu-latest
+
+    name: Static analysis
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run PHPStan
+        run: vendor/bin/phpstan analyse --no-progress
+
+  code-style:
+    runs-on: ubuntu-latest
+
+    name: Code style
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Check code style
+        run: vendor/bin/pint --test
