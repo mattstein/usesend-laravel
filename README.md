@@ -1,5 +1,6 @@
 # useSend mail transport for Laravel
 
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/mattstein/usesend-laravel.svg?style=flat-square)](https://packagist.org/packages/mattstein/usesend-laravel)
 [![Tests](https://img.shields.io/github/actions/workflow/status/mattstein/usesend-laravel/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/mattstein/usesend-laravel/actions/workflows/tests.yml)
 [![PHP Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmattstein%2Fusesend-laravel%2Fmain%2Fcomposer.json&query=%24.require.php&label=php&style=flat-square)](composer.json)
 [![License](https://img.shields.io/github/license/mattstein/usesend-laravel?style=flat-square)](LICENSE.md)
