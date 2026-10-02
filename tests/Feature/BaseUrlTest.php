@@ -24,7 +24,9 @@ it('trims surrounding whitespace and trailing slashes', function () {
 
 it('keeps a non-default port', function () {
     expect(BaseUrl::make('http://localhost:3000')->emailsEndpoint())
-        ->toBe('http://localhost:3000/api/v1/emails');
+        ->toBe('http://localhost:3000/api/v1/emails')
+        ->and((string) BaseUrl::make('http://localhost:3000/usesend/'))
+        ->toBe('http://localhost:3000/usesend');
 });
 
 it('keeps a reverse proxy path prefix', function () {

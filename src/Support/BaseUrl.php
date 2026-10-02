@@ -70,17 +70,17 @@ final class BaseUrl
 
     public function emailsEndpoint(): string
     {
+        return $this.self::EMAILS_ENDPOINT;
+    }
+
+    public function __toString(): string
+    {
         $url = $this->scheme.'://'.$this->host;
 
         if ($this->port !== null) {
             $url .= ':'.$this->port;
         }
 
-        return $url.$this->prefix.self::EMAILS_ENDPOINT;
-    }
-
-    public function __toString(): string
-    {
-        return $this->scheme.'://'.$this->host.$this->prefix;
+        return $url.$this->prefix;
     }
 }

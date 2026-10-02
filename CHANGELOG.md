@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `BaseUrl` keeps a non-default port when cast to a string.
 - `USESEND_INLINE_ATTACHMENTS=attach` now attaches inline images; the setting
   was read under the wrong key and ignored.
 - Template sends include the HTML body, which useSend requires even with a
@@ -41,5 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Support for Laravel 10 and 11, which are past end of life and affected by
+  unpatched security advisories. The package now requires PHP 8.2+ and Laravel
+  12.60+ or 13.10+, the first releases with the fix for Laravel’s CRLF
+  injection in the email validation rule.
 - The `spatie/laravel-package-tools` dependency, and the install command's
   prompt to star the repository.

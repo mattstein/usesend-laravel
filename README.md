@@ -1,9 +1,8 @@
 # useSend mail transport for Laravel
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/mattstein/usesend-laravel.svg?style=flat-square)](https://packagist.org/packages/mattstein/usesend-laravel)
-[![Tests](https://github.com/mattstein/usesend-laravel/actions/workflows/tests.yml/badge.svg)](https://github.com/mattstein/usesend-laravel/actions/workflows/tests.yml)
-[![PHP Version](https://img.shields.io/packagist/p/mattstein/usesend-laravel.svg?style=flat-square)](https://packagist.org/packages/mattstein/usesend-laravel)
-[![License](https://img.shields.io/packagist/l/mattstein/usesend-laravel.svg?style=flat-square)](LICENSE.md)
+[![Tests](https://img.shields.io/github/actions/workflow/status/mattstein/usesend-laravel/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/mattstein/usesend-laravel/actions/workflows/tests.yml)
+[![PHP Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmattstein%2Fusesend-laravel%2Fmain%2Fcomposer.json&query=%24.require.php&label=php&style=flat-square)](composer.json)
+[![License](https://img.shields.io/github/license/mattstein/usesend-laravel?style=flat-square)](LICENSE.md)
 
 Send Laravel mail through [useSend](https://usesend.com), the open-source
 transactional email service, with a first-party mail transport.
@@ -18,8 +17,11 @@ transactional email service, with a first-party mail transport.
 
 ## Requirements
 
-- PHP 8.1+
-- Laravel 10, 11, 12, or 13
+- PHP 8.2+
+- Laravel 12 or 13
+
+Laravel 10 and 11 are past end of life, and every release of them is affected
+by an unpatched security advisory, so Composer will not install them.
 
 ## Installation
 
