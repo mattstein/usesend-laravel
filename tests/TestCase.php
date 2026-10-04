@@ -5,11 +5,21 @@ declare(strict_types=1);
 namespace MattStein\UseSend\Tests;
 
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Sleep;
 use MattStein\UseSend\UseSendServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Http::preventStrayRequests();
+        Sleep::fake();
+    }
+
     /**
      * @param  Application  $app
      * @return array<int, class-string>

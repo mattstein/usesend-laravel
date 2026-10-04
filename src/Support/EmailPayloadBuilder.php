@@ -4,86 +4,50 @@ declare(strict_types=1);
 
 namespace MattStein\UseSend\Support;
 
+use DateTimeImmutable;
+use DateTimeInterface;
+use Exception;
+use JsonException;
+use MattStein\UseSend\Exceptions\InvalidScheduledAtException;
+use MattStein\UseSend\Exceptions\InvalidTemplateVariablesException;
 use MattStein\UseSend\Exceptions\MissingBodyException;
 use MattStein\UseSend\Exceptions\MissingFromAddressException;
 use MattStein\UseSend\Exceptions\MissingRecipientException;
 use MattStein\UseSend\Exceptions\MissingSubjectException;
 use MattStein\UseSend\Exceptions\TooManyAttachmentsException;
-use MattStein\UseSend\Exceptions\UseSendException;
+use MattStein\UseSend\UseSendTransport;
 use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Header\HeaderInterface;
 use Symfony\Component\Mime\Part\DataPart;
-use Throwable;
 
 /**
  * Turns a Symfony email into a useSend "send email" request body.
  *
- * Everything useSend accepts is filled in from the message: recipients, the
- * sender, subject, bodies, attachments, and any custom headers the mailable
- * set. Headers that describe the envelope or the MIME structure are left out,
- * because useSend owns those.
- *
  * Recipients are sent as bare addresses. useSend matches its suppression list
  * against the exact string it receives, so a display name ("Jane"
  * <jane@example.com>) would slip past a suppressed jane@example.com.
+ *
+ * @internal
  */
 final class EmailPayloadBuilder
 {
-    /** Set this header on a message to send it with a useSend template. */
-    public const HEADER_TEMPLATE_ID = 'X-UseSend-Template-Id';
-
-    /** JSON object of template variables, used with HEADER_TEMPLATE_ID. */
-    public const HEADER_VARIABLES = 'X-UseSend-Variables';
-
-    /** The useSend email this message replies to, for threading. */
-    public const HEADER_IN_REPLY_TO_ID = 'X-UseSend-In-Reply-To-Id';
-
-    /** Sent to useSend as the Idempotency-Key request header, not as an email header. */
-    public const HEADER_IDEMPOTENCY_KEY = 'X-UseSend-Idempotency-Key';
-
     /** useSend rejects requests with more attachments than this. */
     public const MAX_ATTACHMENTS = 10;
 
     /**
-     * Headers useSend or the email format already owns, or that must not be
-     * forwarded as custom headers. Names are lower-cased, because that is how
-     * they are compared.
-     *
-     * @var list<string>
+     * Headers that become payload fields, or that useSend and the MIME
+     * structure own. Lower-cased, because that is how they are compared.
      */
-    private const STRIPPED_HEADERS = [
-        'to',
-        'from',
-        'cc',
-        'bcc',
-        'reply-to',
-        'subject',
-        'date',
-        'message-id',
-        'in-reply-to',
-        'references',
-        'return-path',
-        'sender',
-        'mime-version',
-        'content-type',
-        'content-transfer-encoding',
-        'content-disposition',
-        'content-id',
-        'resent-from',
-        'resent-to',
-        'resent-cc',
-        'resent-bcc',
-        'resent-date',
-        'resent-sender',
-        'resent-message-id',
-        'x-usesend-template-id',
-        'x-usesend-variables',
-        'x-usesend-in-reply-to-id',
-        'x-usesend-idempotency-key',
-        'x-usesend-email-id',
+    private const RESERVED_HEADERS = [
+        'to', 'from', 'cc', 'bcc', 'reply-to', 'subject', 'sender', 'return-path',
+        'date', 'message-id', 'mime-version',
+        'content-type', 'content-transfer-encoding', 'content-disposition', 'content-id',
     ];
+
+    /** useSend drops headers with these prefixes, and its options use them. */
+    private const RESERVED_HEADER_PREFIXES = ['x-usesend-', 'x-unsend-', 'resent-'];
 
     public function __construct(private readonly bool $includeInlineAttachments = false)
     {
@@ -95,106 +59,68 @@ final class EmailPayloadBuilder
      */
     public function build(Email $email, ?Envelope $envelope = null): array
     {
-        $payload = [];
+        $payload = [
+            'to' => $this->addresses($this->toRecipients($email, $envelope)),
+            'from' => $this->from($email),
+            'cc' => $this->addresses($email->getCc()),
+            'bcc' => $this->addresses($email->getBcc()),
+            'replyTo' => $this->addresses($email->getReplyTo()),
+            'subject' => $this->nonEmpty($email->getSubject()),
+            ...$this->content($email),
+            'inReplyToId' => MessageHeaders::get($email, UseSendTransport::IN_REPLY_TO_ID_HEADER),
+            'scheduledAt' => $this->scheduledAt($email),
+            'headers' => $this->headers($email),
+            'attachments' => $this->attachments($email),
+        ];
 
-        $to = $this->addresses($this->toRecipients($email, $envelope));
-
-        if ($to === []) {
+        if ($payload['to'] === []) {
             throw MissingRecipientException::forMessage();
         }
 
-        $payload['to'] = $to;
-
-        $from = $email->getFrom()[0] ?? null;
-
-        if (! $from instanceof Address) {
-            throw MissingFromAddressException::forMessage();
+        if ($payload['subject'] === null && ! isset($payload['templateId'])) {
+            throw MissingSubjectException::forMessage();
         }
 
-        $payload['from'] = $from->toString();
+        return array_filter($payload, static fn (mixed $value): bool => $value !== null && $value !== []);
+    }
 
-        foreach (['cc' => $email->getCc(), 'bcc' => $email->getBcc()] as $field => $addresses) {
-            $values = $this->addresses($addresses);
-
-            if ($values !== []) {
-                $payload[$field] = $values;
-            }
-        }
-
-        $replyTo = $this->addresses($email->getReplyTo());
-
-        if ($replyTo !== []) {
-            $payload['replyTo'] = $replyTo;
-        }
-
-        $templateId = $this->controlHeader($email, self::HEADER_TEMPLATE_ID);
-        $text = $this->bodyToString($email->getTextBody());
-        $html = $this->bodyToString($email->getHtmlBody());
+    /**
+     * The template, or the text and HTML bodies.
+     *
+     * useSend requires text or HTML even with a template, then replaces the
+     * subject and HTML with the template's. It never replaces the text, so
+     * with a template the text is only sent when there is no HTML.
+     *
+     * @return array<string, mixed>
+     */
+    private function content(Email $email): array
+    {
+        $text = $this->body($email->getTextBody(), $email->getTextCharset());
+        $html = $this->body($email->getHtmlBody(), $email->getHtmlCharset());
 
         if ($text === null && $html === null) {
             throw MissingBodyException::forMessage();
         }
 
-        if ($templateId !== null) {
-            $payload['templateId'] = $templateId;
+        $templateId = MessageHeaders::get($email, UseSendTransport::TEMPLATE_ID_HEADER);
 
-            $variables = $this->variables($email);
-
-            if ($variables !== []) {
-                $payload['variables'] = $variables;
-            }
-
-            // useSend's API rejects a request with neither text nor HTML, even
-            // with a template, then replaces the subject and HTML with the
-            // template's. It does not replace text, so text is only sent when
-            // there is no HTML to stand in for it.
-            $payload += $html !== null ? ['html' => $html] : ['text' => $text];
-        } else {
-            $subject = $this->nonEmptyString($email->getSubject());
-
-            if ($subject === null) {
-                throw MissingSubjectException::forMessage();
-            }
-
-            $payload['subject'] = $subject;
-
-            if ($text !== null) {
-                $payload['text'] = $text;
-            }
-
-            if ($html !== null) {
-                $payload['html'] = $html;
-            }
+        if ($templateId === null) {
+            return ['text' => $text, 'html' => $html];
         }
 
-        $inReplyToId = $this->controlHeader($email, self::HEADER_IN_REPLY_TO_ID);
-
-        if ($inReplyToId !== null) {
-            $payload['inReplyToId'] = $inReplyToId;
-        }
-
-        $headers = $this->headers($email);
-
-        if ($headers !== []) {
-            $payload['headers'] = $headers;
-        }
-
-        $attachments = $this->attachments($email);
-
-        if ($attachments !== []) {
-            $payload['attachments'] = $attachments;
-        }
-
-        return $payload;
+        return [
+            'templateId' => $templateId,
+            'variables' => $this->variables($email),
+            ...($html !== null ? ['html' => $html] : ['text' => $text]),
+        ];
     }
 
     /**
      * The "to" recipients, taken from the envelope when there is one.
      *
      * The envelope is who the mail is actually delivered to, and can differ
-     * from the To header (an envelope passed to the mailer, or one changed by
-     * a listener). Envelope recipients also include every cc and bcc, so those
-     * are taken out again, unless the address is in the To header too.
+     * from the To header. It also holds every cc and bcc, so those are taken
+     * out again, unless the address is in the To header too.
      *
      * @return list<Address>
      */
@@ -236,7 +162,7 @@ final class EmailPayloadBuilder
     }
 
     /**
-     * Bare addresses, without display names: see the class docblock.
+     * Bare, de-duplicated addresses: see the class docblock.
      *
      * @param  Address[]  $addresses
      * @return list<string>
@@ -252,39 +178,60 @@ final class EmailPayloadBuilder
         return array_values($values);
     }
 
+    private function from(Email $email): string
+    {
+        $from = $email->getFrom()[0] ?? null;
+
+        if ($from === null) {
+            throw MissingFromAddressException::forMessage();
+        }
+
+        return $from->toString();
+    }
+
     /**
+     * Repeated headers, such as the X-Tag Laravel adds for each tag, are
+     * joined into one, because useSend takes one value per name.
+     *
      * @return array<string, string>
      */
     private function headers(Email $email): array
     {
-        $headers = [];
+        $names = [];
+        $values = [];
 
-        // Symfony's Headers object is not iterable; all() is the accessor.
         foreach ($email->getHeaders()->all() as $header) {
             if (! $header instanceof HeaderInterface) {
                 continue;
             }
 
-            if (in_array(strtolower($header->getName()), self::STRIPPED_HEADERS, true)) {
+            $key = strtolower($header->getName());
+            $value = MessageHeaders::value($header);
+
+            if ($value === null || $this->isReserved($key)) {
                 continue;
             }
 
-            try {
-                $value = trim($header->getBodyAsString());
-            } catch (Throwable) {
-                // A header whose value cannot be represented as a string (a
-                // malformed one) is dropped rather than breaking the send.
-                continue;
-            }
-
-            if ($value === '') {
-                continue;
-            }
-
-            $headers[$header->getName()] = $value;
+            $names[$key] ??= $header->getName();
+            $values[$key] = isset($values[$key]) ? $values[$key].', '.$value : $value;
         }
 
-        return $headers;
+        return array_combine(array_values($names), array_values($values));
+    }
+
+    private function isReserved(string $header): bool
+    {
+        if (in_array($header, self::RESERVED_HEADERS, true)) {
+            return true;
+        }
+
+        foreach (self::RESERVED_HEADER_PREFIXES as $prefix) {
+            if (str_starts_with($header, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -295,8 +242,8 @@ final class EmailPayloadBuilder
         $attachments = [];
 
         foreach ($email->getAttachments() as $part) {
-            // DataPart::getContentId() generates an id on first call, so the
-            // disposition is what decides whether a part is inline.
+            // getContentId() would generate an ID for every part, so the
+            // disposition is what says a part is inline.
             $inline = $part->getDisposition() === 'inline';
 
             if ($inline && ! $this->includeInlineAttachments) {
@@ -316,95 +263,96 @@ final class EmailPayloadBuilder
         return $attachments;
     }
 
+    /**
+     * useSend requires a filename, so a part without one is named after its
+     * media type.
+     */
     private function filename(DataPart $part, bool $inline): string
     {
-        $filename = $part->getFilename();
-
-        if (is_string($filename) && trim($filename) !== '') {
-            return mb_substr(trim($filename), 0, 255);
-        }
-
-        // useSend requires a filename, so name the part after its media type.
-        $extension = $part->getMediaSubtype() ?: 'bin';
-
-        return ($inline ? 'inline' : 'attachment').'.'.$extension;
+        return $this->nonEmpty(trim((string) $part->getFilename()))
+            ?? ($inline ? 'inline' : 'attachment').'.'.($part->getMediaSubtype() ?: 'bin');
     }
 
     /**
+     * useSend only accepts string values, so other JSON values are converted:
+     * booleans to "true" and "false", null to "", and arrays to JSON.
+     *
      * @return array<string, string>
      */
     private function variables(Email $email): array
     {
-        $raw = $this->controlHeader($email, self::HEADER_VARIABLES);
+        $raw = MessageHeaders::get($email, UseSendTransport::VARIABLES_HEADER);
 
         if ($raw === null) {
             return [];
         }
 
         try {
-            $decoded = json_decode($raw, true, 8, JSON_THROW_ON_ERROR);
-        } catch (Throwable $exception) {
-            throw UseSendException::malformedTemplateVariables($exception->getMessage());
+            $decoded = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw InvalidTemplateVariablesException::because($exception->getMessage());
         }
 
-        if (! is_array($decoded)) {
-            throw UseSendException::malformedTemplateVariables('it is not a JSON object.');
+        if (! is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) {
+            throw InvalidTemplateVariablesException::because('it is a JSON '.get_debug_type($decoded).'.');
         }
 
-        $variables = [];
-
-        foreach ($decoded as $name => $value) {
-            $variables[(string) $name] = $this->stringify($value);
-        }
-
-        return $variables;
-    }
-
-    private function stringify(mixed $value): string
-    {
-        return match (true) {
-            is_bool($value) => $value ? 'true' : 'false',
-            $value === null => '',
-            is_scalar($value) => (string) $value,
-            is_array($value) => (string) json_encode($value),
-            default => throw UseSendException::malformedTemplateVariables('template variables must be scalars or arrays.'),
-        };
-    }
-
-    private function controlHeader(Email $email, string $name): ?string
-    {
-        $header = $email->getHeaders()->get($name);
-
-        if ($header === null) {
-            return null;
-        }
-
-        $value = trim($header->getBodyAsString());
-
-        return $value === '' ? null : $value;
+        return array_combine(
+            array_map(strval(...), array_keys($decoded)),
+            array_map(fn (mixed $value): string => match (true) {
+                is_bool($value) => $value ? 'true' : 'false',
+                is_array($value) => json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                is_scalar($value) => (string) $value,
+                default => '',
+            }, $decoded),
+        );
     }
 
     /**
-     * A message body may be a string, a stream, or absent. useSend takes JSON,
-     * so a stream is read out and anything empty is left out of the request.
+     * Normalized to the ISO 8601 form useSend requires, with an offset.
      */
-    private function bodyToString(mixed $value): ?string
+    private function scheduledAt(Email $email): ?string
     {
-        if (is_resource($value)) {
-            $contents = stream_get_contents($value);
+        $value = MessageHeaders::get($email, UseSendTransport::SCHEDULED_AT_HEADER);
 
-            return ($contents === false || $contents === '') ? null : $contents;
-        }
-
-        return $this->nonEmptyString($value);
-    }
-
-    private function nonEmptyString(mixed $value): ?string
-    {
-        if (! is_string($value) || $value === '') {
+        if ($value === null) {
             return null;
         }
 
-        return $value;
+        try {
+            return (new DateTimeImmutable($value))->format(DateTimeInterface::ATOM);
+        } catch (Exception) {
+            throw InvalidScheduledAtException::unparseable($value);
+        }
+    }
+
+    /**
+     * A body may be a string or a stream, in any charset. useSend takes JSON,
+     * so a stream is read out and everything is converted to UTF-8.
+     *
+     * @param  resource|string|null  $body
+     */
+    private function body(mixed $body, ?string $charset): ?string
+    {
+        if (is_resource($body)) {
+            if (stream_get_meta_data($body)['seekable']) {
+                rewind($body);
+            }
+
+            $body = stream_get_contents($body);
+        }
+
+        $body = $this->nonEmpty(is_string($body) ? $body : null);
+
+        if ($body === null || $charset === null || strcasecmp($charset, 'utf-8') === 0) {
+            return $body;
+        }
+
+        return (string) mb_convert_encoding($body, 'UTF-8', $charset);
+    }
+
+    private function nonEmpty(?string $value): ?string
+    {
+        return $value === null || $value === '' ? null : $value;
     }
 }

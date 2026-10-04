@@ -5,6 +5,59 @@ All notable changes to `usesend-laravel` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `HasUseSendSchedule` concern and `X-UseSend-Scheduled-At` header, for useSend's
+  `scheduledAt`.
+- Retries cover rate limits (HTTP 429), waiting as long as `Retry-After` asks,
+  up to a minute.
+- Retries cover a 409 for a duplicate that useSend is still processing, which a
+  retry after a timeout can run into.
+- `ApiRequestFailedException::$errorCode`, holding useSend's error code, such as
+  `RATE_LIMITED`.
+- `UseSendTransport` constants for every header the package reads, so the
+  options work from a notification's `withSymfonyMessage()`.
+- `In-Reply-To` and `References` headers are forwarded, for replies to mail
+  useSend did not send.
+
+### Changed
+
+- Retries always send a generated `Idempotency-Key`, so they can no longer
+  double-send. The `idempotency` option and `USESEND_IDEMPOTENCY` are removed:
+  a generated key only ever protected retries.
+- Template sends include the mailable's subject, which useSend uses if the
+  template does not exist.
+- Repeated headers, such as one `X-Tag` per Laravel tag, are joined into one
+  instead of keeping only the last.
+- Calling a concern's method twice replaces the earlier value.
+- `UseSendException` is abstract. A malformed template payload throws
+  `InvalidTemplateVariablesException`, and a raw message throws
+  `UnsupportedMessageException`.
+- The `EmailPayloadBuilder::HEADER_*` constants are replaced by the
+  `UseSendTransport` constants. Classes in `MattStein\UseSend\Support` are
+  marked `@internal`.
+
+### Fixed
+
+- `USESEND_RETRIES` now counts extra attempts, as documented. It was passed to
+  Laravel as the total, so `USESEND_RETRIES=1` never retried.
+- useSend's errors are read from its `{"error": {"code", "message"}}` shape and
+  its validation issues, instead of being quoted as raw JSON.
+- The 409 message no longer suggests turning idempotency off.
+- Redirects are not followed. Following one turned the POST into a GET that
+  could answer 200 without sending anything.
+- A successful response that is not JSON, such as a web page at a mistyped base
+  URL, fails instead of passing as a send.
+- Header values are sent as written. Non-ASCII values were MIME-encoded first.
+- Nested template variables keep Unicode and slashes as they are, so `Zürich`
+  no longer reaches the email as `Z\u00fcrich`.
+- Bodies in charsets other than UTF-8 are converted, and stream bodies are read
+  from the start.
+- The package requires the `illuminate/console`, `illuminate/container`,
+  `symfony/mailer`, and `symfony/mime` packages it uses.
+
 ## [0.1.0] - 2026-10-02
 
 ### Added
@@ -48,3 +101,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injection in the email validation rule.
 - The `spatie/laravel-package-tools` dependency, and the install command's
   prompt to star the repository.
+
+[Unreleased]: https://github.com/mattstein/usesend-laravel/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/mattstein/usesend-laravel/releases/tag/v0.1.0

@@ -21,9 +21,13 @@
     ],
     "require": {
         "php": "^8.2",
+        "illuminate/console": "^12.60|^13.10",
+        "illuminate/container": "^12.60|^13.10",
         "illuminate/http": "^12.60|^13.10",
         "illuminate/mail": "^12.60|^13.10",
-        "illuminate/support": "^12.60|^13.10"
+        "illuminate/support": "^12.60|^13.10",
+        "symfony/mailer": "^7.2|^8.0",
+        "symfony/mime": "^7.2|^8.0"
     },
     "require-dev": {
         "larastan/larastan": "^3.0",
