@@ -6,5 +6,7 @@ parameters:
     paths:
         - src
         - tests
+    scanFiles:
+        - tests/Pest.php
     tmpDir: build/phpstan
     checkOctaneCompatibility: false

@@ -54,37 +54,19 @@ return [
     | Retries
     |--------------------------------------------------------------------------
     |
-    | Number of additional attempts made when the API request fails, and the
-    | delay between them. Retries are off by default because useSend has no
-    | built-in de-duplication: enabling retries without an idempotency key can
-    | send the same email twice if a response is lost in transit. Enable
-    | 'idempotency' below at the same time and retries become safe.
+    | Additional attempts made after a connection failure, a server error, or
+    | a rate limit, and the milliseconds to wait between them. A rate limit's
+    | Retry-After is honoured. A rejected email (any other 4xx) is never
+    | retried, because it would only be rejected again.
+    |
+    | Retried requests share an Idempotency-Key, so useSend answers a retry
+    | with the original email rather than sending it twice.
     |
     */
 
     'retries' => (int) env('USESEND_RETRIES', 0),
 
     'retry_sleep' => (int) env('USESEND_RETRY_SLEEP', 200),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Idempotency
-    |--------------------------------------------------------------------------
-    |
-    | When enabled, every request carries an "Idempotency-Key" header. The key
-    | is generated once per send and reused by the retry loop, so useSend
-    | collapses a retried request into the original email instead of sending
-    | it twice. useSend remembers a key for 24 hours.
-    |
-    | Note that the key is not derived from the message: sending the same
-    | mailable twice still sends twice, and a retried queued job is a new
-    | send with a new key. To cover those, give the message its own key with
-    | the HasUseSendIdempotencyKey concern; that key is used whether or not
-    | this option is on.
-    |
-    */
-
-    'idempotency' => filter_var(env('USESEND_IDEMPOTENCY', false), FILTER_VALIDATE_BOOL),
 
     /*
     |--------------------------------------------------------------------------

@@ -14,6 +14,8 @@ use MattStein\UseSend\Exceptions\MissingApiKeyException;
  * mailer can override the package defaults, then from config/usesend.php.
  * Resolution happens per send rather than at construction, which lets an
  * application swap API keys or base URLs at runtime.
+ *
+ * @internal
  */
 final class TransportOptions
 {
@@ -30,7 +32,6 @@ final class TransportOptions
         public readonly int $connectTimeout,
         public readonly int $retries,
         public readonly int $retrySleepMilliseconds,
-        public readonly bool $idempotency,
         public readonly bool $includeInlineAttachments,
         public readonly string $userAgent,
     ) {
@@ -47,11 +48,10 @@ final class TransportOptions
         return new self(
             $read('api_key', null),
             self::stringOr($read('base_url', BaseUrl::DEFAULT_BASE_URL), BaseUrl::DEFAULT_BASE_URL),
-            self::intOr($read('timeout', 30), 30),
-            self::intOr($read('connect_timeout', 10), 10),
-            max(0, self::intOr($read('retries', 0), 0)),
-            max(0, self::intOr($read('retry_sleep', 200), 200)),
-            self::boolOr($read('idempotency', false), false),
+            self::nonNegativeIntOr($read('timeout', 30), 30),
+            self::nonNegativeIntOr($read('connect_timeout', 10), 10),
+            self::nonNegativeIntOr($read('retries', 0), 0),
+            self::nonNegativeIntOr($read('retry_sleep', 200), 200),
             self::inlineAttachments($read('inline_attachments', self::INLINE_SKIP)),
             self::stringOr($read('user_agent', 'mattstein-usesend-laravel'), 'mattstein-usesend-laravel'),
         );
@@ -96,21 +96,8 @@ final class TransportOptions
         return is_string($value) && trim($value) !== '' ? trim($value) : $fallback;
     }
 
-    private static function intOr(mixed $value, int $fallback): int
+    private static function nonNegativeIntOr(mixed $value, int $fallback): int
     {
-        return is_numeric($value) ? (int) $value : $fallback;
-    }
-
-    private static function boolOr(mixed $value, bool $fallback): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if (is_string($value)) {
-            return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? $fallback;
-        }
-
-        return $fallback;
+        return is_numeric($value) ? max(0, (int) $value) : $fallback;
     }
 }

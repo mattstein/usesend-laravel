@@ -1,5 +1,21 @@
 # Upgrading
 
+## From 0.1
+
+- **`USESEND_IDEMPOTENCY` is gone.** Retries now always share a generated
+  `Idempotency-Key`, which is all the option ever did. Remove it from `.env`
+  and from a published `config/usesend.php`; it is ignored if left behind.
+- **`USESEND_RETRIES` counts extra attempts.** `USESEND_RETRIES=2` now makes up
+  to three attempts, as documented. 0.1 made two.
+- **`UseSendException` is abstract.** Catching it still catches everything. A
+  malformed template payload now throws `InvalidTemplateVariablesException`, and
+  a raw message `UnsupportedMessageException`.
+- **Header constants moved to `UseSendTransport`.** Replace
+  `EmailPayloadBuilder::HEADER_TEMPLATE_ID` with
+  `UseSendTransport::TEMPLATE_ID_HEADER`, and likewise for the others.
+- **Template sends include the subject.** useSend replaces it with the
+  template's, so the email is unchanged unless the template does not exist.
+
 ## From a copy-pasted `UnsendTransport`
 
 Applications that copied a transport class into `app/Mail/Transports` can switch
@@ -78,7 +94,7 @@ Mailables, notifications, and queued mail keep working untouched.
 - **The base URL is normalised.** A value like `https://app.usesend.com/api`
   from the docs, or a bare `app.usesend.com`, works instead of producing a
   malformed URL.
-- **Retries are available**, and safe to combine with an idempotency key.
+- **Retries are available**, and never double-send.
 - **Idempotency survives queue retries.** Set a key with
   `useSendIdempotencyKey()`, or keep the `X-Unsend-Idempotency-Key` header your
   mailables already set by renaming it to `X-UseSend-Idempotency-Key`.

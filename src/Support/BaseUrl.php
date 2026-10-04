@@ -12,6 +12,8 @@ use MattStein\UseSend\Exceptions\InvalidBaseUrlException;
  * Accepts every shape people paste into configuration: a bare host, a full
  * URL, a URL with a trailing slash, a URL with a port, a reverse-proxy path
  * prefix, and a URL copied from the docs that already ends in "/api".
+ *
+ * @internal
  */
 final class BaseUrl
 {

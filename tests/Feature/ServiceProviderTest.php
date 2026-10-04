@@ -4,13 +4,25 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Testing\PendingCommand;
+use MattStein\UseSend\UseSendTransport;
 use PHPUnit\Framework\Assert;
 
 use function Pest\Laravel\artisan;
 
 afterEach(function () {
     File::delete(config_path('usesend.php'));
+});
+
+it('registers the usesend transport', function () {
+    expect(Mail::mailer('usesend')->getSymfonyTransport())->toBeInstanceOf(UseSendTransport::class);
+});
+
+it('serves any mailer that names the transport', function () {
+    config()->set('mail.mailers.transactional', ['transport' => 'usesend']);
+
+    expect(Mail::mailer('transactional')->getSymfonyTransport())->toBeInstanceOf(UseSendTransport::class);
 });
 
 it('registers the install command', function () {
@@ -64,6 +76,8 @@ it('merges its defaults without publishing', function () {
     expect(config('usesend.api_key'))->toBe('us_test_key')
         ->and(config('usesend.timeout'))->toBe(30)
         ->and(config('usesend.connect_timeout'))->toBe(10)
+        ->and(config('usesend.retries'))->toBe(0)
         ->and(config('usesend.retry_sleep'))->toBe(200)
-        ->and(config('usesend.inline_attachments'))->toBe('skip');
+        ->and(config('usesend.inline_attachments'))->toBe('skip')
+        ->and(config('usesend.user_agent'))->toBe('mattstein-usesend-laravel');
 });

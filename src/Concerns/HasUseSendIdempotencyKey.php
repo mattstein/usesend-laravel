@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace MattStein\UseSend\Concerns;
 
-use MattStein\UseSend\Support\EmailPayloadBuilder;
+use MattStein\UseSend\Support\MessageHeaders;
+use MattStein\UseSend\UseSendTransport;
 use Symfony\Component\Mime\Email;
 
 /**
@@ -19,10 +20,7 @@ trait HasUseSendIdempotencyKey
     public function useSendIdempotencyKey(string $key): static
     {
         return $this->withSymfonyMessage(function (Email $email) use ($key): void {
-            $headers = $email->getHeaders();
-
-            $headers->remove(EmailPayloadBuilder::HEADER_IDEMPOTENCY_KEY);
-            $headers->addTextHeader(EmailPayloadBuilder::HEADER_IDEMPOTENCY_KEY, $key);
+            MessageHeaders::set($email, UseSendTransport::IDEMPOTENCY_KEY_HEADER, $key);
         });
     }
 }

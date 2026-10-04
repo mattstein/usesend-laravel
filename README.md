@@ -9,10 +9,11 @@ Send Laravel mail through [useSend](https://usesend.com), the open-source
 transactional email service, with a first-party mail transport.
 
 - Works with useSend Cloud, or a self-hosted instance behind your own domain.
-- Maps recipients, attachments, and custom headers onto useSend's send API.
-- Sends through a useSend template instead of a rendered mailable body.
+- Maps recipients, attachments, custom headers, tags, and metadata onto useSend's send API.
+- Sends through a useSend template, schedules delivery, and threads replies.
 - Fails loudly: every rejection becomes an exception that says what useSend said.
-- Supports retries and idempotency keys, so a flaky network or a retried job cannot double-send.
+- Retries connection failures, server errors, and rate limits without ever double-sending.
+- Supports idempotency keys, so a retried queued job cannot double-send either.
 - Keeps the email ID useSend returns, for API lookups and webhooks.
 - Sends recipients so useSend’s suppression list can match them.
 
@@ -123,7 +124,60 @@ class WelcomeMail extends Mailable
 The mailable still needs a body. useSend rejects a request with neither text
 nor HTML, even when it uses a template, and Laravel will not send a message
 without one either. Its HTML is sent and replaced by the template; its text is
-only sent when there is no HTML, because useSend does not replace text.
+only sent when there is no HTML, because useSend does not replace text. Its
+subject is sent too, and replaced by the template's: if the template ID does
+not exist, useSend sends the mailable's own subject and HTML instead.
+
+Variables are sent as strings, because that is all useSend accepts: numbers
+are cast, booleans become `"true"` or `"false"`, `null` becomes `""`, and
+arrays become JSON.
+
+### Scheduled sends
+
+Have useSend hold an email and deliver it later:
+
+```php
+use Illuminate\Mail\Mailable;
+use MattStein\UseSend\Concerns\HasUseSendSchedule;
+
+class MeetupReminder extends Mailable
+{
+    use HasUseSendSchedule;
+
+    public function build(): self
+    {
+        return $this->subject('Your meetup is tomorrow')
+            ->view('mail.reminder')
+            ->useSendScheduledAt($this->meetup->starts_at->subDay());
+    }
+}
+```
+
+The send itself happens straight away: useSend accepts the email, returns its
+ID, and delivers it at the scheduled time. A time in the past is delivered
+immediately. Cancelling or rescheduling a scheduled email is done through
+[useSend's API](https://docs.usesend.com) with that ID.
+
+### Replies
+
+Thread an email as a reply to one useSend sent earlier, by its email ID:
+
+```php
+$this->useSendTemplate('reply_template', inReplyToId: $ticket->usesend_email_id);
+```
+
+Or without a template, with the header:
+
+```php
+use MattStein\UseSend\UseSendTransport;
+
+$this->withSymfonyMessage(function (Email $email) use ($ticket): void {
+    $email->getHeaders()->addTextHeader(UseSendTransport::IN_REPLY_TO_ID_HEADER, $ticket->usesend_email_id);
+});
+```
+
+To reply to mail useSend did not send, set the standard `In-Reply-To` and
+`References` headers, which are forwarded as they are.
 
 ### Idempotent sends
 
@@ -164,9 +218,9 @@ public function headers(): Headers
 ```
 
 The key goes to useSend as its `Idempotency-Key` request header, never as an
-email header, and is used whether or not `USESEND_IDEMPOTENCY` is on. Keys can
-be up to 256 characters. useSend answers a repeat of the same key and body with
-the original email, and a repeat with a different body with HTTP 409.
+email header. Keys can be up to 256 characters. useSend answers a repeat of the
+same key and email with the original email, and a repeat with a different email
+with HTTP 409.
 
 ### The useSend email ID
 
@@ -200,7 +254,7 @@ checks its suppression list against the exact string it receives, so
 `"Jane" <jane@example.com>` would get past a suppressed `jane@example.com`. The
 sender keeps its display name.
 
-### Custom headers
+### Custom headers, tags, and metadata
 
 Any header a mailable sets is forwarded to useSend, except the ones that
 describe the envelope or the MIME structure, which useSend owns:
@@ -215,7 +269,12 @@ $this->withSymfonyMessage(function (Email $email): void {
 ```
 
 `List-Unsubscribe`, `X-Campaign`, and similar headers are all forwarded, which
-copy-pasted transports usually drop.
+copy-pasted transports usually drop. Values are sent as written, so non-ASCII
+text arrives intact.
+
+Laravel's `tag()` and `metadata()` become `X-Tag` and `X-Metadata-*` headers.
+useSend takes one value per header, so repeated headers are joined: two tags
+are sent as `X-Tag: welcome, onboarding`.
 
 ### Attachments
 
@@ -235,9 +294,8 @@ them as ordinary attachments instead.
 | `base_url` | `USESEND_BASE_URL` | `https://app.usesend.com` | Falls back to `USESEND_DOMAIN`. |
 | `timeout` | `USESEND_TIMEOUT` | `30` | Seconds for the whole request. |
 | `connect_timeout` | `USESEND_CONNECT_TIMEOUT` | `10` | Seconds to establish the connection. |
-| `retries` | `USESEND_RETRIES` | `0` | Extra attempts on connection errors and 5xx. |
+| `retries` | `USESEND_RETRIES` | `0` | Extra attempts on connection errors, 5xx, and rate limits. |
 | `retry_sleep` | `USESEND_RETRY_SLEEP` | `200` | Milliseconds between attempts. |
-| `idempotency` | `USESEND_IDEMPOTENCY` | `false` | Generates an `Idempotency-Key` per send. A key set on the message is always used. |
 | `inline_attachments` | `USESEND_INLINE_ATTACHMENTS` | `skip` | `skip` or `attach`. Anything else throws. |
 | `user_agent` | `USESEND_USER_AGENT` | `mattstein-usesend-laravel` | Sent on every request. |
 
@@ -256,21 +314,23 @@ them as ordinary attachments instead.
 Anything else, including an empty value, throws `InvalidBaseUrlException` rather
 than guessing an instance.
 
-### Retries and idempotency
+### Retries
 
-Retries are off by default because useSend does not de-duplicate on its own: a
-retry after a lost response can send the same email twice. Turn both on and the
-trade-off disappears:
+Retries are off by default. Turn them on to ride out a dropped connection, a
+server error, or useSend's rate limit:
 
 ```dotenv
 USESEND_RETRIES=2
-USESEND_IDEMPOTENCY=true
 ```
 
-Each send gets one idempotency key, reused by its retries, so useSend answers a
-repeat with the original email instead of sending again. Two intentional sends
-stay two sends. A 4xx is never retried, because a rejected payload will be
-rejected again.
+That is up to three attempts in all, `USESEND_RETRY_SLEEP` milliseconds apart.
+A rate limit waits as long as useSend's `Retry-After` asks, up to a minute. Any
+other 4xx is never retried, because a rejected email will be rejected again.
+
+Retrying is always safe. The attempts of one send share a generated
+`Idempotency-Key`, so if a response is lost and the request is retried, useSend
+answers with the original email instead of sending a second one. The key is
+random, so two intentional sends of the same mailable stay two sends.
 
 A generated key only covers these HTTP retries. When a queued job is retried,
 it is a new send with a new key. To cover that too, set a key on the message,
@@ -293,12 +353,18 @@ unhandled error.
 | `MissingBodyException` | No text or HTML body. |
 | `TooManyAttachmentsException` | More than ten attachments. |
 | `InvalidIdempotencyKeyException` | An idempotency key over 256 characters. |
-| `ApiRequestFailedException` | useSend rejected the request, or was unreachable. |
-| `UseSendException` | A malformed template payload, or an unsupported message type. |
+| `InvalidTemplateVariablesException` | Template variables that are not a JSON object. |
+| `InvalidScheduledAtException` | A scheduled time that is not a date. |
+| `UnsupportedMessageException` | A raw message, rather than a MIME message. |
+| `ApiRequestFailedException` | useSend rejected the request, was unreachable, or answered with something other than its API. |
 
-`ApiRequestFailedException` carries `status` and `responseBody`, and its message
-includes whatever useSend said. The API key is never part of a message, so these
-exceptions are safe to log:
+Everything except `ApiRequestFailedException` is thrown before any request is
+made.
+
+`ApiRequestFailedException` carries the HTTP `status`, useSend's `errorCode`
+(such as `RATE_LIMITED` or `NOT_UNIQUE`), and the `responseBody`. Its message
+includes whatever useSend said, field by field for a failed validation. The API
+key is never part of a message, so these exceptions are safe to log:
 
 ```php
 try {
@@ -306,10 +372,16 @@ try {
 } catch (ApiRequestFailedException $e) {
     Log::warning('useSend rejected an email', [
         'status' => $e->status,
+        'code' => $e->errorCode,
         'body' => $e->responseBody,
     ]);
 }
 ```
+
+Redirects are never followed, because following one would turn the request
+into a GET that can answer 200 without sending anything. A redirect, or a
+successful response that is not JSON, means the base URL points at something
+other than useSend's API, and fails with a message that says so.
 
 ## Testing
 
@@ -361,13 +433,32 @@ See [UPGRADING.md](UPGRADING.md) for the step-by-step swap, including the
 | Cc, Bcc | `cc`, `bcc` (bare addresses) |
 | From (first address) | `from` (display name included) |
 | Reply-To | `replyTo` (bare addresses) |
-| Subject | `subject`, unless a template is used |
-| Text / HTML body | `text` / `html`; with a template, HTML only when there is some |
+| Subject | `subject` |
+| Text / HTML body | `text` / `html`, in UTF-8; with a template, HTML only when there is some |
 | Attachments | `attachments`, base64 |
-| Other headers | `headers` |
+| Other headers, tags, metadata | `headers` |
 | `useSendTemplate()` | `templateId`, `variables` |
 | `useSendTemplate(..., inReplyToId:)` | `inReplyToId` |
+| `useSendScheduledAt()` | `scheduledAt` |
 | `useSendIdempotencyKey()` | `Idempotency-Key` request header |
+
+Each concern sets a header, so the same options work from `withSymfonyMessage()`
+in a notification or anywhere else a mailable trait cannot go:
+
+| Constant on `UseSendTransport` | Header | Value |
+| --- | --- | --- |
+| `TEMPLATE_ID_HEADER` | `X-UseSend-Template-Id` | A template ID |
+| `VARIABLES_HEADER` | `X-UseSend-Variables` | A JSON object |
+| `IN_REPLY_TO_ID_HEADER` | `X-UseSend-In-Reply-To-Id` | A useSend email ID |
+| `SCHEDULED_AT_HEADER` | `X-UseSend-Scheduled-At` | An ISO 8601 date |
+| `IDEMPOTENCY_KEY_HEADER` | `X-UseSend-Idempotency-Key` | Up to 256 characters |
+
+These headers are read by the transport and never sent as email headers.
+
+The transport sends one email per message. useSend's other endpoints, such as
+batch sends, cancelling or rescheduling, and contacts, are outside what a mail
+transport does; use the email ID it records with [useSend's
+API](https://docs.usesend.com) for those.
 
 ## License
 

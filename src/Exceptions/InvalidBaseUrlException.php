@@ -24,7 +24,7 @@ final class InvalidBaseUrlException extends UseSendException
     public static function unsupportedScheme(string $scheme, string $value): self
     {
         return new self(sprintf(
-            'The useSend base URL [%s] uses the unsupported scheme [%s]. use only http or https.',
+            'The useSend base URL [%s] uses the unsupported scheme [%s]. Use http or https.',
             $value,
             $scheme,
         ));
